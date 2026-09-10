@@ -18,6 +18,21 @@ class MSTeamsStatusColoursConfig(CustomBaseModel):
     offline: str = "#8A8886"
 
 
+class MSTeamsStatusIconConfig(CustomBaseModel):
+    available: str = "\u25cf"
+    available_idle: str = "\u25cf"
+    away: str = "\u25cf"
+    be_right_back: str = "\u25cf"
+    busy: str = "\u25cf"
+    in_a_meeting: str = "\u25cf"
+    in_a_call: str = "\u25cf"
+    presenting: str = "\u25cf"
+    on_the_phone: str = "\u25cf"
+    do_not_disturb: str = "\u2296"
+    focusing: str = "\u2296"
+    offline: str = "\u25cb"
+
+
 class CallbacksMSTeamsStatusConfig(CallbacksConfig):
     on_left: str = "toggle_label"
     on_right: str = "toggle_label"
@@ -32,3 +47,4 @@ class MSTeamsStatusConfig(CustomBaseModel):
     tooltip: bool = True
     callbacks: CallbacksConfig = CallbacksMSTeamsStatusConfig()
     status_colours: MSTeamsStatusColoursConfig = MSTeamsStatusColoursConfig()
+    status_icons: MSTeamsStatusIconConfig = MSTeamsStatusIconConfig()

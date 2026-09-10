@@ -11,12 +11,6 @@ AVAIL_RE = re.compile(r"availability:\s*([A-Za-z]+)", re.IGNORECASE)
 UNREAD_RE = re.compile(r"unread notification count:\s*(\d+)", re.IGNORECASE)
 
 
-class AvailabilityDot(Enum):
-    standard = "\u25cf"  # 0x25CF
-    dnd = "\u2296"  # 0x2296
-    ring = "\u25cb"  # 0x25CB
-
-
 class AvailabilityStatusText(Enum):
     Available = "Available"
     AvailableIdle = "Available Idle"
@@ -59,12 +53,9 @@ class AvailabilityStatus(BaseModel):
     status: AvailabilityStatusText
     status_class: AvailabilityStatusClass
     unread: int
-    dot: AvailabilityDot
 
 
 class MSTeamsStatusAPI(QObject):
-    AvailabilityDot = AvailabilityDot
-
     _instance: MSTeamsStatusAPI | None = None
 
     @classmethod
@@ -90,21 +81,10 @@ class MSTeamsStatusAPI(QObject):
         status, unread = self._find_status()
         status_member = AvailabilityStatusText.to_status(status)
         status_value = AvailabilityStatus(
-            status=status_member,
-            status_class=AvailabilityStatusClass.to_class(status),
-            unread=unread,
-            dot=self.dot_for(status_member),
+            status=status_member, status_class=AvailabilityStatusClass.to_class(status), unread=unread
         )
 
         return status_value
-
-    @staticmethod
-    def dot_for(status: AvailabilityStatusText | None) -> AvailabilityDot:
-        if status in {AvailabilityStatusText.DoNotDisturb, AvailabilityStatusText.Focusing}:
-            return AvailabilityDot.dnd
-        if status is AvailabilityStatusText.Offline:
-            return AvailabilityDot.ring
-        return AvailabilityDot.standard
 
     def _find_status(self):
         avail_match = None

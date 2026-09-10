@@ -11,6 +11,7 @@ YASB.egg-info/
 *.lock
 # Ignore virtual environment directories
 .venv/
+.idea/
 venv/
 # Application specific
 src/yasb.log

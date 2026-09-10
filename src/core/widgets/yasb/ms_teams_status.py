@@ -43,9 +43,10 @@ class MSTeamsStatusWidget(BaseWidget):
     def _update_label(self):  # , status: AvailabilityStatus):
         self.teams_status = self._teams_api.get_status()
         dot_colour = getattr(self.config.status_colours, (self.teams_status.status_class.value).replace("-", "_"))
+        dot_icon = getattr(self.config.status_icons, (self.teams_status.status_class.value).replace("-", "_"))
 
         ms_teams_data = {
-            "{dot}": f'<span style="color:{dot_colour}">{self.teams_status.dot.value}</span>',
+            "{dot}": f'<span style="color:{dot_colour}">{dot_icon}</span>',
             "{status_text}": self.teams_status.status.value,
             "{unread_notifs}": self.teams_status.unread,
         }
