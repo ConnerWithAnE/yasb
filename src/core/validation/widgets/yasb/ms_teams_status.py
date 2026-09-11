@@ -1,6 +1,19 @@
+from typing import Literal
+
 from pydantic import Field
 
 from core.validation.widgets.base_model import CallbacksConfig, CustomBaseModel
+
+
+class MSTeamsStatusCardConfig(CustomBaseModel):
+    blur: bool = True
+    round_corners: bool = True
+    round_corners_type: Literal["normal", "small"] = "normal"
+    border_color: str = "System"
+    alignment: str = "right"
+    direction: str = "down"
+    offset_top: int = 6
+    offset_left: int = 0
 
 
 class MSTeamsStatusColoursConfig(CustomBaseModel):
@@ -42,9 +55,10 @@ class MSTeamsStatusConfig(CustomBaseModel):
     label: str = "{data[html]}"
     label_alt: str = "{data[html]} {data[text]}"
     class_name: str = "ms_teams_status"
-    update_interval: int = (Field(default=10000, ge=1000, le=60000),)
+    update_interval: int = Field(default=10000, ge=1000, le=60000)
     logs_path: str = "$env:LOCALAPPDATA/Packages/MSTeams_*/LocalCache/Microsoft/MSTeams/Logs/MSTeams_*.log"
     tooltip: bool = True
     callbacks: CallbacksConfig = CallbacksMSTeamsStatusConfig()
     status_colours: MSTeamsStatusColoursConfig = MSTeamsStatusColoursConfig()
     status_icons: MSTeamsStatusIconConfig = MSTeamsStatusIconConfig()
+    status_card: MSTeamsStatusCardConfig = MSTeamsStatusCardConfig()

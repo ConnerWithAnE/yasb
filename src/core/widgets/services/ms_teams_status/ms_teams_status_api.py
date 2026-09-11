@@ -1,5 +1,8 @@
+import logging
 import os
 import re
+import shutil
+import subprocess
 from enum import Enum
 from pathlib import Path
 from typing import Self
@@ -30,6 +33,16 @@ class AvailabilityStatusText(Enum):
         return cls.__members__.get(token)  # the member, or None if unknown
 
 
+class AvailabilitySettable(Enum):
+    Available = "available"
+    Away = "away"
+    BeRightBack = "be-right-back"
+    Busy = "busy"
+    DoNotDisturb = "dnd"
+    Offline = "offline"
+    Reset = None
+
+
 class AvailabilityStatusClass(Enum):
     Available = "available"
     AvailableIdle = "available-idle"
@@ -43,6 +56,7 @@ class AvailabilityStatusClass(Enum):
     DoNotDisturb = "do-not-disturb"
     Focusing = "focusing"
     Offline = "offline"
+    Reset = "reset"
 
     @classmethod
     def to_class(cls, token: str) -> Self | None:
@@ -57,6 +71,8 @@ class AvailabilityStatus(BaseModel):
 
 class MSTeamsStatusAPI(QObject):
     _instance: MSTeamsStatusAPI | None = None
+    # Resolved on first use — the probe spawns PowerShell, so it can't run at import time.
+    _teams_installed: bool | None = None
 
     @classmethod
     def get_instance(cls, parent: QObject, url: QUrl = None):
@@ -69,36 +85,84 @@ class MSTeamsStatusAPI(QObject):
         super().__init__(parent)
 
         self._teams_log_dir = MSTeamsStatusAPI._find_teams_log_dir()
-        self._teams_log_file = MSTeamsStatusAPI._find_latest_teams_log(self._teams_log_dir)
+        self._last_status: AvailabilityStatus | None = None
 
         self._tail = 8000
+        self._max_logs = 3
 
-    def get_status(self):
+    def get_status(self) -> AvailabilityStatus | None:
         if self._teams_log_dir is None:
-            if self._teams_log_dir is None:
-                self._teams_log_dir = MSTeamsStatusAPI._find_teams_log_dir()
-            self._teams_log_file = MSTeamsStatusAPI._find_latest_teams_log(self._teams_log_dir)
-        status, unread = self._find_status()
+            self._teams_log_dir = MSTeamsStatusAPI._find_teams_log_dir()
+
+        # log rotates every few hours, fresh file carries no
+        # availability line until the next presence change or 5-minute heartbeat.
+        # re-resolve on every call and fall back through the previous logs.
+        logs = MSTeamsStatusAPI._find_teams_logs(self._teams_log_dir, self._max_logs)
+        status, unread = self._find_status(logs)
         status_member = AvailabilityStatusText.to_status(status)
-        status_value = AvailabilityStatus(
-            status=status_member, status_class=AvailabilityStatusClass.to_class(status), unread=unread
+
+        if status_member is None:
+            return self._last_status
+
+        self._last_status = AvailabilityStatus(
+            status=status_member,
+            status_class=AvailabilityStatusClass.to_class(status),
+            unread=unread if unread is not None else 0,
         )
+        return self._last_status
 
-        return status_value
-
-    def _find_status(self):
+    def _find_status(self, logs: list[Path]) -> tuple[str | None, int | None]:
+        """Most recent availability/unread pair across `logs`, which are newest-first."""
         avail_match = None
         notif_match = None
-        lines = MSTeamsStatusAPI._tail_lines(self._teams_log_file, self._tail)
 
-        for line in reversed(lines):
-            if avail_match is None:
-                avail_match = AVAIL_RE.search(line)
-            if notif_match is None:
-                notif_match = UNREAD_RE.search(line)
+        for log in logs:
+            try:
+                lines = MSTeamsStatusAPI._tail_lines(log, self._tail)
+            except OSError:
+                continue  # rotated or locked out from under us
+
+            for line in reversed(lines):
+                if avail_match is None:
+                    avail_match = AVAIL_RE.search(line)
+                if notif_match is None:
+                    notif_match = UNREAD_RE.search(line)
+                if avail_match is not None and notif_match is not None:
+                    break
+
             if avail_match is not None and notif_match is not None:
-                return (avail_match.group(1), int(notif_match.group(1)))
-        return (avail_match.group(1) if avail_match else None, int(notif_match.group(1)) if notif_match else None)
+                break
+
+        return (
+            avail_match.group(1) if avail_match else None,
+            int(notif_match.group(1)) if notif_match else None,
+        )
+
+    @classmethod
+    def _is_teams_installed(cls) -> bool:
+        """Cached wrapper — the probe spawns a subprocess, so run it at most once."""
+        if cls._teams_installed is None:
+            cls._teams_installed = cls._check_teams_installed()
+        return cls._teams_installed
+
+    @staticmethod
+    def _check_teams_installed() -> bool:
+        """True if the new Teams MSIX package is registered for this user."""
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-AppxPackage -Name MSTeams | Select-Object -First 1 -ExpandProperty PackageFullName",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except FileNotFoundError, subprocess.TimeoutExpired:
+            return False
+        return result.returncode == 0 and result.stdout.strip() != ""
 
     @classmethod
     def ms_teams_timer_start(cls):
@@ -106,7 +170,6 @@ class MSTeamsStatusAPI(QObject):
 
     @staticmethod
     def _find_teams_log_dir() -> Path | None:
-        """Locate the new Teams Logs directory, or None if not found."""
         local = os.environ.get("LOCALAPPDATA")
         if not local:
             return None
@@ -124,24 +187,20 @@ class MSTeamsStatusAPI(QObject):
         return None
 
     @staticmethod
-    def _find_latest_teams_log(_teams_log_dir) -> Path | None:
-        """Return the newest .txt/.log file in the Teams Logs dir, or None."""
-        if _teams_log_dir and os.path.exists(_teams_log_dir):
-            log_dir = _teams_log_dir
+    def _find_teams_logs(teams_log_dir: Path | None, limit: int = 3) -> list[Path]:
+        if teams_log_dir and teams_log_dir.is_dir():
+            log_dir = teams_log_dir
         else:
             log_dir = MSTeamsStatusAPI._find_teams_log_dir()
         if not log_dir:
-            return None
+            return []
 
         logs = [p for p in log_dir.glob("MSTeams_*.log") if p.is_file()]
-        if not logs:
-            return None
-
-        return max(logs, key=lambda p: p.stat().st_mtime)
+        logs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return logs[:limit]
 
     @staticmethod
     def _tail_lines(path: Path, max_lines: int, block_size: int = 65536) -> list[str]:
-        """Last `max_lines` lines of `path`, read from the end without loading the file."""
         blocks: list[bytes] = []
         newlines = 0
         with open(path, "rb") as f:
@@ -157,3 +216,19 @@ class MSTeamsStatusAPI(QObject):
         # Join before decoding so a multi-byte char split across a block boundary survives.
         lines = b"".join(reversed(blocks)).decode("utf-8", errors="replace").splitlines()
         return lines[-max_lines:]
+
+    def set_status(self, status: AvailabilitySettable) -> bool:
+        if not self._is_teams_installed():
+            logging.warning("MS Teams not installed or not findable")
+            return False
+
+        exe = shutil.which("ms-teams") or shutil.which("ms-teams.exe")
+        if not exe:
+            return False
+
+        arg = "--reset-presence" if status is AvailabilitySettable.Reset else f"--set-presence-to-{status.value}"
+        try:
+            subprocess.run([exe, arg], timeout=10)
+            return True
+        except OSError, subprocess.TimeoutExpired:
+            return False

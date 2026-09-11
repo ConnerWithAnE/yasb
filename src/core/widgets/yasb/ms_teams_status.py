@@ -1,11 +1,22 @@
 import logging
 import re
+from functools import partial
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.utils.tooltip import set_tooltip
-from core.utils.utilities import refresh_widget_style
+from core.utils.utilities import PopupWidget, refresh_widget_style
 from core.validation.widgets.yasb.ms_teams_status import MSTeamsStatusConfig
 from core.widgets.base import BaseWidget
-from core.widgets.services.ms_teams_status.ms_teams_status_api import MSTeamsStatusAPI
+from core.widgets.services.ms_teams_status.ms_teams_status_api import (
+    AvailabilitySettable,
+    AvailabilityStatus,
+    AvailabilityStatusClass,
+    AvailabilityStatusText,
+    MSTeamsStatusAPI,
+)
+from core.widgets.services.ms_teams_status.widgets import ClickableWidget
 
 
 class MSTeamsStatusWidget(BaseWidget):
@@ -20,16 +31,21 @@ class MSTeamsStatusWidget(BaseWidget):
 
         self._label_content = config.label
         self._label_alt_content = config.label_alt
+        self.unread = 0
+        self._skip_ticks = 0
 
         self._teams_api = MSTeamsStatusAPI.get_instance(self)
 
         self._init_container()
         self.build_widget_label(self.config.label, self.config.label_alt)
         self.register_callback("update_label", self._update_label)
+        self.register_callback("toggle_card", self._toggle_card)
         self.register_callback("toggle_label", self._toggle_label)
+
         self.callback_left = config.callbacks.on_left
         self.callback_right = config.callbacks.on_right
-        self.callback_timer = "update_label"
+        self.register_callback("timer_update", self._timer_update)
+        self.callback_timer = "timer_update"
         self.start_timer()
 
     def _toggle_label(self):
@@ -40,8 +56,22 @@ class MSTeamsStatusWidget(BaseWidget):
             widget.setVisible(self._show_alt_label)
         self._update_label()
 
-    def _update_label(self):  # , status: AvailabilityStatus):
-        self.teams_status = self._teams_api.get_status()
+    def _timer_update(self):
+        """Timer entry point — honours the post-selection suppression window."""
+        if self._skip_ticks > 0:
+            self._skip_ticks -= 1
+            return
+        self._update_label()
+
+    def _update_label(self, new_status: AvailabilityStatus = None):  # , status: AvailabilityStatus):
+        if new_status is None:
+            teams_status = self._teams_api.get_status()
+        else:
+            teams_status = new_status
+        if teams_status is None:
+            return
+        self.unread = teams_status.unread
+        self.teams_status = teams_status
         dot_colour = getattr(self.config.status_colours, (self.teams_status.status_class.value).replace("-", "_"))
         dot_icon = getattr(self.config.status_icons, (self.teams_status.status_class.value).replace("-", "_"))
 
@@ -75,6 +105,7 @@ class MSTeamsStatusWidget(BaseWidget):
                 if is_icon:
                     icon = re.sub(r"<span.*?>|</span>", "", part).strip()
                     active_widgets[widget_index].setText(icon)
+                    active_widgets[widget_index].setProperty("class", "icon")
                 else:
                     label_class = "label alt" if self._show_alt_label else "label"
                     formatted_text = part.format(info=ms_teams_data)
@@ -86,3 +117,129 @@ class MSTeamsStatusWidget(BaseWidget):
                 widget_index += 1
         except Exception as e:
             logging.exception("Failed to update label: %s", e)
+
+    def _toggle_card(self):
+        self._popup_card()
+
+    def _popup_card(self):
+        self.dialog = PopupWidget(
+            self,
+            self.config.status_card.blur,
+            self.config.status_card.round_corners,
+            self.config.status_card.round_corners_type,
+            self.config.status_card.border_color,
+            pinnable=True,
+        )
+        self.dialog.setProperty("class", "ms-teams-status-card")
+
+        self._build_teams_card()
+
+    def _build_teams_card(self):
+        main_layout = QVBoxLayout()
+
+        def create_option_frame(status):
+            status_toggle_frame = ClickableWidget()
+
+            self._availibitiy_toggles.append(status_toggle_frame)
+
+            status_toggle_frame.clicked.connect(partial(self._on_status_selected, status))
+
+            status_toggle_frame.setProperty("class", "availability-option")
+
+            status_toggle_layout = QHBoxLayout()
+            status_toggle_layout.setContentsMargins(0, 0, 0, 0)
+            status_toggle_layout.setSpacing(4)
+            status_toggle_layout.setAlignment(Qt.AlignmentFlag.AlignJustify)
+            status_toggle_frame.setLayout(status_toggle_layout)
+
+            # Status Text
+            status_label = QLabel(AvailabilityStatusText[status.name].value)
+            status_label.setProperty("class", f"label-text {AvailabilityStatusClass[status.name].value}")
+            status_toggle_layout.addWidget(status_label)
+
+            status_toggle_layout.addStretch()
+
+            # Status Icon
+            status_class = AvailabilityStatusClass[status.name].value.replace("-", "_")
+            colour = getattr(self.config.status_colours, status_class)
+            icon = getattr(self.config.status_icons, status_class)
+            icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
+            icon_label.setProperty("class", "icon-label")
+            status_toggle_layout.addWidget(icon_label)
+
+            return status_toggle_frame
+
+        availability_widgets: list[QWidget] = []
+        self._availibitiy_toggles = []
+        for status in AvailabilitySettable:
+            # Skip the reset status
+            if status.value is None:
+                continue
+
+            status_option = create_option_frame(status)
+
+            availability_widgets.append(status_option)
+
+        status_layout = QVBoxLayout()
+        for widget in availability_widgets:
+            status_layout.addWidget(widget)
+
+        status_reset_frame = ClickableWidget()
+
+        self._availibitiy_toggles.append(status_reset_frame)
+
+        status_reset_frame.clicked.connect(partial(self._on_status_selected, status))
+
+        status_reset_frame.setProperty("class", "availability-option reset")
+
+        status_reset_layout = QHBoxLayout()
+        status_reset_layout.setContentsMargins(0, 0, 0, 0)
+        status_reset_layout.setSpacing(4)
+        status_reset_layout.setAlignment(Qt.AlignmentFlag.AlignJustify)
+        status_reset_frame.setLayout(status_reset_layout)
+
+        # Status Text
+        status_label = QLabel("Reset")
+        status_label.setProperty("class", "label-text reset")
+        status_reset_layout.addWidget(status_label)
+
+        status_reset_layout.addStretch()
+
+        """
+        # Status Icon
+        status_class = AvailabilityStatusClass[status.name].value.replace("-", "_")
+        colour = getattr(self.config.status_colours, status_class)
+        icon = getattr(self.config.status_icons, status_class)
+        icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
+        icon_label.setProperty("class", "icon-label")
+        status_reset_layout.addWidget(icon_label)
+        """
+
+        status_layout.addWidget(status_reset_frame)
+
+        main_layout.addLayout(status_layout)
+
+        self.dialog.setLayout(main_layout)
+        self.dialog.adjustSize()
+        self.dialog.setPosition(
+            alignment=self.config.status_card.alignment,
+            direction=self.config.status_card.direction,
+            offset_left=self.config.status_card.offset_left,
+            offset_top=self.config.status_card.offset_top,
+        )
+
+        self.dialog.show()
+        self.dialog.set_pinned(True)
+
+    def _on_status_selected(self, status: AvailabilitySettable):
+        if not self._teams_api.set_status(status):
+            return
+        self._skip_ticks = 2
+        self.dialog.hide()
+        self._update_label(
+            AvailabilityStatus(
+                status=AvailabilityStatusText[status.name],
+                status_class=AvailabilityStatusClass[status.name],
+                unread=self.unread,
+            )
+        )
