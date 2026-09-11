@@ -14,6 +14,9 @@ class MSTeamsStatusCardConfig(CustomBaseModel):
     direction: str = "down"
     offset_top: int = 6
     offset_left: int = 0
+    columns: int = 1
+    reset_icon: str = "\u25cb"
+    reset_icon_colour: str = "#8A8886"
 
 
 class MSTeamsStatusColoursConfig(CustomBaseModel):

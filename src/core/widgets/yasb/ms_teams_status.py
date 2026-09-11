@@ -3,7 +3,7 @@ import re
 from functools import partial
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.utils.tooltip import set_tooltip
 from core.utils.utilities import PopupWidget, refresh_widget_style
@@ -180,15 +180,22 @@ class MSTeamsStatusWidget(BaseWidget):
 
             availability_widgets.append(status_option)
 
-        status_layout = QVBoxLayout()
-        for widget in availability_widgets:
-            status_layout.addWidget(widget)
+        status_grid = QGridLayout()
+        status_grid.setContentsMargins(0, 0, 0, 0)
+        status_grid.setSpacing(4)
+
+        columns = self.config.status_card.columns
+        for i, widget in enumerate(availability_widgets):
+            row, col = divmod(i, columns)
+            status_grid.addWidget(widget, row, col)
+        for col in range(columns):
+            status_grid.setColumnStretch(col, 1)
 
         status_reset_frame = ClickableWidget()
 
         self._availibitiy_toggles.append(status_reset_frame)
 
-        status_reset_frame.clicked.connect(partial(self._on_status_selected, status))
+        status_reset_frame.clicked.connect(partial(self._on_status_selected, AvailabilitySettable.Reset))
 
         status_reset_frame.setProperty("class", "availability-option reset")
 
@@ -205,19 +212,15 @@ class MSTeamsStatusWidget(BaseWidget):
 
         status_reset_layout.addStretch()
 
-        """
         # Status Icon
-        status_class = AvailabilityStatusClass[status.name].value.replace("-", "_")
-        colour = getattr(self.config.status_colours, status_class)
-        icon = getattr(self.config.status_icons, status_class)
+        colour = self.config.status_card.reset_icon_colour
+        icon = self.config.status_card.reset_icon
         icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
         icon_label.setProperty("class", "icon-label")
         status_reset_layout.addWidget(icon_label)
-        """
 
-        status_layout.addWidget(status_reset_frame)
-
-        main_layout.addLayout(status_layout)
+        main_layout.addLayout(status_grid)
+        main_layout.addWidget(status_reset_frame)
 
         self.dialog.setLayout(main_layout)
         self.dialog.adjustSize()
@@ -234,8 +237,12 @@ class MSTeamsStatusWidget(BaseWidget):
     def _on_status_selected(self, status: AvailabilitySettable):
         if not self._teams_api.set_status(status):
             return
-        self._skip_ticks = 2
+
         self.dialog.hide()
+        if status is AvailabilitySettable.Reset:
+            return
+
+        self._skip_ticks = 2
         self._update_label(
             AvailabilityStatus(
                 status=AvailabilityStatusText[status.name],
