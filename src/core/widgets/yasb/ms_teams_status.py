@@ -3,7 +3,7 @@ import re
 from functools import partial
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.utils.tooltip import set_tooltip
 from core.utils.utilities import PopupWidget, refresh_widget_style
@@ -33,6 +33,8 @@ class MSTeamsStatusWidget(BaseWidget):
         self._label_alt_content = config.label_alt
         self.unread = 0
         self._skip_ticks = 0
+        # None until the first status is read from the Teams logs
+        self.teams_status: AvailabilityStatus | None = None
 
         self._teams_api = MSTeamsStatusAPI.get_instance(self)
 
@@ -98,14 +100,15 @@ class MSTeamsStatusWidget(BaseWidget):
                 # Decide icon vs label from the template, before substitution —
                 # substituted values may themselves contain <span> markup.
                 is_icon = "<span" in part and "</span>" in part
+                if is_icon:
+                    # Strip only the template's span, so a substituted {dot} keeps its inline colour
+                    part = re.sub(r"^<span.*?>|</span>$", "", part).strip()
                 for option, value in ms_teams_data.items():
                     part = part.replace(option, str(value))
                 if not part or widget_index >= len(active_widgets):
                     continue
                 if is_icon:
-                    icon = re.sub(r"<span.*?>|</span>", "", part).strip()
-                    active_widgets[widget_index].setText(icon)
-                    active_widgets[widget_index].setProperty("class", "icon")
+                    active_widgets[widget_index].setText(part)
                 else:
                     label_class = "label alt" if self._show_alt_label else "label"
                     formatted_text = part.format(info=ms_teams_data)
@@ -136,6 +139,14 @@ class MSTeamsStatusWidget(BaseWidget):
 
     def _build_teams_card(self):
         main_layout = QVBoxLayout()
+        show_icons = self.config.status_card.show_icons
+        icons_before = self.config.status_card.icons_before_status
+        dividers = self.config.status_card.section_dividers
+
+        def make_divider():
+            line = QFrame()
+            line.setProperty("class", "card-divider")
+            return line
 
         def create_option_frame(status):
             status_toggle_frame = ClickableWidget()
@@ -148,26 +159,87 @@ class MSTeamsStatusWidget(BaseWidget):
 
             status_toggle_layout = QHBoxLayout()
             status_toggle_layout.setContentsMargins(0, 0, 0, 0)
-            status_toggle_layout.setSpacing(4)
+            status_toggle_layout.setSpacing(0)
             status_toggle_layout.setAlignment(Qt.AlignmentFlag.AlignJustify)
             status_toggle_frame.setLayout(status_toggle_layout)
 
             # Status Text
             status_label = QLabel(AvailabilityStatusText[status.name].value)
             status_label.setProperty("class", f"label-text {AvailabilityStatusClass[status.name].value}")
-            status_toggle_layout.addWidget(status_label)
 
-            status_toggle_layout.addStretch()
+            if not icons_before:
+                status_toggle_layout.addWidget(status_label)
+                status_toggle_layout.addStretch()
 
             # Status Icon
-            status_class = AvailabilityStatusClass[status.name].value.replace("-", "_")
-            colour = getattr(self.config.status_colours, status_class)
-            icon = getattr(self.config.status_icons, status_class)
-            icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
-            icon_label.setProperty("class", "icon-label")
-            status_toggle_layout.addWidget(icon_label)
+            if show_icons:
+                status_class = AvailabilityStatusClass[status.name].value.replace("-", "_")
+                colour = getattr(self.config.status_colours, status_class)
+                icon = getattr(self.config.status_icons, status_class)
+                icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
+                icon_label.setProperty("class", "icon-label")
+                status_toggle_layout.addWidget(icon_label)
+
+            if icons_before:
+                status_toggle_layout.addWidget(status_label)
+                status_toggle_layout.addStretch()
 
             return status_toggle_frame
+
+        if self.config.status_card.display_current_info and self.teams_status is not None:
+            # Wrapped in QFrames rather than bare layouts, since stylesheets only apply to widgets
+            current_info_frame = QFrame()
+            current_info_frame.setProperty("class", "current-info")
+            current_info_layout = QHBoxLayout(current_info_frame)
+            current_info_layout.setContentsMargins(0, 0, 0, 0)
+            current_info_layout.setSpacing(4)
+
+            current_status_frame = QFrame()
+            current_status_frame.setProperty("class", "current-status")
+            current_status_layout = QHBoxLayout(current_status_frame)
+            current_status_layout.setContentsMargins(0, 0, 0, 0)
+            current_status_layout.setSpacing(8)
+            current_status_text_layout = QVBoxLayout()
+            current_status_text_layout.setContentsMargins(0, 0, 0, 0)
+            current_status_layout.setSpacing(0)
+
+            # Text
+            current_status_text_label = QLabel("Current status")
+            current_status_text_label.setProperty("class", "current-status-text-label")
+            current_status_text_layout.addWidget(current_status_text_label)
+
+            current_status_label = QLabel(f"{self.teams_status.status.value}")
+            current_status_label.setProperty("class", "current-status-label")
+            current_status_text_layout.addWidget(current_status_label)
+
+            current_status_class = AvailabilityStatusClass[self.teams_status.status.name].value.replace("-", "_")
+            current_colour = getattr(self.config.status_colours, current_status_class)
+            current_icon = getattr(self.config.status_icons, current_status_class)
+            current_icon_label = QLabel(f'<span style="color:{current_colour}">{current_icon}</span>')
+            current_icon_label.setProperty("class", "current-status-icon icon-label")
+
+            current_status_layout.addWidget(current_icon_label)
+
+            # current_status_text_layout.addStretch()
+            current_status_layout.addLayout(current_status_text_layout)
+
+            unread_frame = QFrame()
+            unread_frame.setProperty("class", "current-notification")
+            unread_layout = QHBoxLayout(unread_frame)
+            unread_layout.setContentsMargins(0, 0, 0, 0)
+            # Text
+            unread_label = QLabel(f"{self.config.status_icons.notification_bell}   {self.teams_status.unread}")
+            unread_label.setProperty("class", "notification-label")
+            unread_layout.addWidget(unread_label)
+
+            current_info_layout.addWidget(current_status_frame)
+            current_info_layout.addStretch()
+            current_info_layout.addWidget(unread_frame)
+
+            main_layout.addWidget(current_info_frame)
+
+            if dividers:
+                main_layout.addWidget(make_divider())
 
         availability_widgets: list[QWidget] = []
         self._availibitiy_toggles = []
@@ -208,18 +280,26 @@ class MSTeamsStatusWidget(BaseWidget):
         # Status Text
         status_label = QLabel("Reset")
         status_label.setProperty("class", "label-text reset")
-        status_reset_layout.addWidget(status_label)
 
-        status_reset_layout.addStretch()
+        if not icons_before:
+            status_reset_layout.addWidget(status_label)
+            status_reset_layout.addStretch()
 
         # Status Icon
-        colour = self.config.status_card.reset_icon_colour
-        icon = self.config.status_card.reset_icon
-        icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
-        icon_label.setProperty("class", "icon-label")
-        status_reset_layout.addWidget(icon_label)
+        if show_icons:
+            colour = self.config.status_colours.reset
+            icon = self.config.status_icons.reset
+            icon_label = QLabel(f'<span style="color:{colour}">{icon}</span>')
+            icon_label.setProperty("class", "icon-label")
+            status_reset_layout.addWidget(icon_label)
+
+        if icons_before:
+            status_reset_layout.addWidget(status_label)
+            status_reset_layout.addStretch()
 
         main_layout.addLayout(status_grid)
+        if dividers:
+            main_layout.addWidget(make_divider())
         main_layout.addWidget(status_reset_frame)
 
         self.dialog.setLayout(main_layout)
@@ -232,7 +312,7 @@ class MSTeamsStatusWidget(BaseWidget):
         )
 
         self.dialog.show()
-        self.dialog.set_pinned(True)
+        self.dialog.set_pinned(self.config.status_card.pinnable)
 
     def _on_status_selected(self, status: AvailabilitySettable):
         if not self._teams_api.set_status(status):
@@ -242,7 +322,7 @@ class MSTeamsStatusWidget(BaseWidget):
         if status is AvailabilitySettable.Reset:
             return
 
-        self._skip_ticks = 2
+        self._skip_ticks = 5
         self._update_label(
             AvailabilityStatus(
                 status=AvailabilityStatusText[status.name],

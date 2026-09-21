@@ -14,9 +14,12 @@ class MSTeamsStatusCardConfig(CustomBaseModel):
     direction: str = "down"
     offset_top: int = 6
     offset_left: int = 0
-    columns: int = 1
-    reset_icon: str = "\u25cb"
-    reset_icon_colour: str = "#8A8886"
+    columns: int = Field(default=1, ge=1)
+    pinnable: bool = False
+    display_current_info: bool = True
+    show_icons: bool = True
+    icons_before_status: bool = True
+    section_dividers: bool = True
 
 
 class MSTeamsStatusColoursConfig(CustomBaseModel):
@@ -32,6 +35,7 @@ class MSTeamsStatusColoursConfig(CustomBaseModel):
     do_not_disturb: str = "#C4314B"
     focusing: str = "#C4314B"
     offline: str = "#8A8886"
+    reset: str = "#8A8886"
 
 
 class MSTeamsStatusIconConfig(CustomBaseModel):
@@ -47,6 +51,8 @@ class MSTeamsStatusIconConfig(CustomBaseModel):
     do_not_disturb: str = "\u2296"
     focusing: str = "\u2296"
     offline: str = "\u25cb"
+    reset: str = "\u27f2"
+    notification_bell: str = "\uf0f3"
 
 
 class CallbacksMSTeamsStatusConfig(CallbacksConfig):
@@ -55,8 +61,8 @@ class CallbacksMSTeamsStatusConfig(CallbacksConfig):
 
 
 class MSTeamsStatusConfig(CustomBaseModel):
-    label: str = "{data[html]}"
-    label_alt: str = "{data[html]} {data[text]}"
+    label: str = "{dot}"
+    label_alt: str = "{dot} {status_text} <span class='bell'>\uf0f3</span> {unread_notifs}"
     class_name: str = "ms_teams_status"
     update_interval: int = Field(default=10000, ge=1000, le=60000)
     logs_path: str = "$env:LOCALAPPDATA/Packages/MSTeams_*/LocalCache/Microsoft/MSTeams/Logs/MSTeams_*.log"
